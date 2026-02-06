@@ -1,0 +1,111 @@
+# .pre-commit-config.yaml - Standard pre-commit configuration
+# Deploy to project root as .pre-commit-config.yaml
+#
+# Install: pip install pre-commit && pre-commit install
+
+default_stages: [commit]
+fail_fast: false
+
+repos:
+  # =============================================================================
+  # GENERAL HOOKS
+  # =============================================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+        exclude: \.md$
+      - id: check-yaml
+        args: ['--unsafe']
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-case-conflict
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+
+  # =============================================================================
+  # SECRET DETECTION (CRITICAL)
+  # =============================================================================
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.1
+    hooks:
+      - id: gitleaks
+
+  # =============================================================================
+  # GO HOOKS
+  # =============================================================================
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-fmt
+      - id: go-vet
+      - id: go-imports
+        args: ['-local', 'github.com/schemabounce']
+      - id: go-mod-tidy
+
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v1.55.2
+    hooks:
+      - id: golangci-lint
+        args: ['--timeout=5m', '--new-from-rev=HEAD~1']
+
+  # =============================================================================
+  # COMMIT MESSAGE (Conventional Commits)
+  # =============================================================================
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.0.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: ['--strict', '--force-scope']
+
+  # =============================================================================
+  # MARKDOWN
+  # =============================================================================
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.38.0
+    hooks:
+      - id: markdownlint
+        args: ['--fix', '--disable', 'MD013', 'MD033', 'MD041', 'MD024']
+        exclude: CHANGELOG\.md
+
+  # =============================================================================
+  # SHELL SCRIPTS
+  # =============================================================================
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.9.0.6
+    hooks:
+      - id: shellcheck
+        args: ['--severity=warning']
+
+  # =============================================================================
+  # DOCKER (if Dockerfile exists)
+  # =============================================================================
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint
+        args: ['--ignore', 'DL3008', '--ignore', 'DL3018', '--ignore', 'DL3013']
+
+# =============================================================================
+# CI CONFIGURATION
+# =============================================================================
+ci:
+  autofix_commit_msg: |
+    style: auto-fix by pre-commit hooks
+
+    [skip ci]
+  autofix_prs: true
+  autoupdate_branch: 'development'
+  autoupdate_commit_msg: 'chore: update pre-commit hooks'
+  autoupdate_schedule: monthly
+  skip: []
+  submodules: false

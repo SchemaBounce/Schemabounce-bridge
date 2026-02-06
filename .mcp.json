@@ -1,0 +1,40 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/mnt/c/git"]
+    },
+    "kubernetes": {
+      "command": "npx",
+      "args": ["-y", "kubernetes-mcp-server"]
+    },
+    "argocd": {
+      "command": "npx",
+      "args": ["-y", "argocd-mcp@latest", "stdio"],
+      "env": {
+        "ARGOCD_BASE_URL": "${ARGOCD_BASE_URL}",
+        "ARGOCD_API_TOKEN": "${ARGOCD_API_TOKEN}"
+      }
+    },
+    "kolumn": {
+      "command": "node",
+      "args": ["/mnt/c/git/Kolumn-mcp/dist/index.js"]
+    }
+  }
+}
