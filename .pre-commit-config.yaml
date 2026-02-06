@@ -1,5 +1,4 @@
-# .pre-commit-config.yaml - Standard pre-commit configuration
-# Deploy to project root as .pre-commit-config.yaml
+# .pre-commit-config.yaml - Pre-commit hooks for SchemaBounce Bridge
 #
 # Install: pip install pre-commit && pre-commit install
 
@@ -40,22 +39,28 @@ repos:
       - id: gitleaks
 
   # =============================================================================
-  # GO HOOKS
+  # BRIDGE BUILD VALIDATION
+  # Validates the bridge can be built with CGO_ENABLED=0 (static binary).
+  # Catches transitive CGO dependency issues (e.g., Oracle/godror).
   # =============================================================================
-  - repo: https://github.com/dnephin/pre-commit-golang
-    rev: v0.5.1
+  - repo: local
     hooks:
-      - id: go-fmt
-      - id: go-vet
-      - id: go-imports
-        args: ['-local', 'github.com/schemabounce']
-      - id: go-mod-tidy
+      - id: bridge-build-validate
+        name: Validate bridge build (CGO_ENABLED=0)
+        entry: scripts/validate-bridge-build.sh
+        language: script
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+        verbose: true
 
-  - repo: https://github.com/golangci/golangci-lint
-    rev: v1.55.2
-    hooks:
-      - id: golangci-lint
-        args: ['--timeout=5m', '--new-from-rev=HEAD~1']
+      - id: bridge-build-quick
+        name: Quick bridge build check
+        entry: bash -c 'CORE_API_DIR="${CORE_API_DIR:-/mnt/c/git/core-api/schemabounce-api}" && [ -d "$CORE_API_DIR/cmd/bridge" ] && (cd "$CORE_API_DIR" && CGO_ENABLED=0 go build -o /dev/null ./cmd/bridge/) && echo "bridge build OK" || { echo "bridge build FAILED - run scripts/validate-bridge-build.sh for details"; exit 1; }'
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
 
   # =============================================================================
   # COMMIT MESSAGE (Conventional Commits)
@@ -107,5 +112,5 @@ ci:
   autoupdate_branch: 'development'
   autoupdate_commit_msg: 'chore: update pre-commit hooks'
   autoupdate_schedule: monthly
-  skip: []
+  skip: [bridge-build-validate, bridge-build-quick]
   submodules: false

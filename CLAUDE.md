@@ -4,349 +4,230 @@ This file provides guidance to Claude Code when working in this repository.
 
 ## Repository Purpose
 
-**SchemaBounce Bridge** is a standalone binary that orchestrates CDC (Change Data Capture) streaming from databases to the SchemaBounce platform. It supports three capture modes:
+**SchemaBounce Bridge** is a public, open-source distribution of the SchemaBounce CDC (Change Data Capture) agent. It is deployed **inside customer networks** alongside their databases and streams change events to the SchemaBounce platform.
 
-| Mode | Database | Method | Latency |
-|------|----------|--------|---------|
+Published as a container image on **GitHub Container Registry (ghcr.io)**.
+
+### Security Context
+
+This binary runs inside customer infrastructure with direct access to production databases. Security and container hardening are non-negotiable:
+
+- Customers trust this image to sit on their private network
+- It has database credentials and replication access
+- Any vulnerability is a direct risk to customer data
+
+### Capture Modes
+
+| Mode | Source | Method | Latency |
+|------|--------|--------|---------|
 | `wal` | PostgreSQL | Logical Replication | ~milliseconds |
-| `mysql_outbox` | MySQL/MariaDB | Polling | ~3 seconds |
-| `mssql_outbox` | SQL Server | Polling | ~3 seconds |
+| `mysql_outbox` | MySQL/MariaDB | Outbox Polling | ~3 seconds |
+| `mssql_outbox` | SQL Server | Outbox Polling | ~3 seconds |
+| `mongodb` | MongoDB | Change Streams | ~milliseconds |
+| `kafka` | Kafka | Consumer (Debezium JSON) | ~milliseconds |
 
-## Architecture Documentation
+### Sender Modes
 
-**Comprehensive architecture documentation**: [`/mnt/c/git/core-api/docs/OUTBOX_PATTERN_ARCHITECTURE.md`](/mnt/c/git/core-api/docs/OUTBOX_PATTERN_ARCHITECTURE.md)
+| Mode | Target | Status |
+|------|--------|--------|
+| `redis-direct` | Redis Streams (direct write) | Recommended |
+| `http` | Ingest API (HTTP POST) | Deprecated |
 
-This document covers:
-- Complete data flow diagrams
-- CDCEvent data structure
-- Cursor management
-- Batch sender with retry logic
-- Configuration reference
-- Database setup guides
-- Deployment (Docker/Kubernetes)
-- Monitoring and troubleshooting
+## Security Requirements
 
-## Quick Start
+### Container Image
+
+- **Base image**: Distroless or minimal Alpine - no shells, no package managers in production
+- **Non-root**: Container MUST run as non-root user (UID 1000)
+- **Static binary**: Built with `CGO_ENABLED=0` - no shared library dependencies
+- **No secrets baked in**: All credentials via environment variables or mounted secrets
+- **Read-only filesystem**: Container should work with `readOnlyRootFilesystem: true` (data dir is a volume)
+- **No capabilities**: Drop all Linux capabilities (`drop: [ALL]`)
+- **Signed images**: Container images on ghcr.io should be signed with cosign
+
+### Build Security
+
+- **Reproducible builds**: Pinned Go version, deterministic compilation
+- **SBOM**: Generate Software Bill of Materials with each release
+- **Vulnerability scanning**: Trivy/Grype scan on every image build
+- **No dev dependencies in image**: Multi-stage build, only the static binary in final image
+- **Supply chain**: Verify go.sum integrity, use `go mod verify`
+
+### Runtime Security
+
+- **TLS everywhere**: mTLS for Redis connections, TLS for API endpoints
+- **HMAC signing**: All API requests are HMAC-signed
+- **Credential rotation**: Support for dynamic credential refresh
+- **SSH tunnel**: Optional bastion/jump host support for database access
+- **Audit logging**: Structured JSON logs for security event tracking
+- **Health endpoints**: `/health`, `/health/ready`, `/health/live` for orchestrator probes
+
+### What MUST NOT be in this repo
+
+- Internal file paths or development tooling references
+- Hardcoded credentials, API keys, or tokens
+- References to internal infrastructure (IPs, hostnames, internal URLs)
+- Customer-specific configuration
+- Internal Claude plugin/skill configurations
+
+## Repository Structure
+
+```
+bin/                    # Pre-compiled bridge binary (for quick testing)
+deploy/
+  kubernetes/           # Kubernetes deployment manifests
+scripts/
+  validate-bridge-build.sh  # Build validation (CGO_ENABLED=0 + go vet)
+.pre-commit-config.yaml     # Pre-commit hooks
+.golangci.yml               # Go linting configuration
+```
+
+Source code lives in a separate private repository. This repo contains:
+- Pre-compiled binaries
+- Deployment manifests and configuration templates
+- Container image build/publish automation
+- Documentation
+
+## Build Constraints
+
+The bridge binary MUST build with `CGO_ENABLED=0` to produce a static binary for distroless/Alpine containers. This means:
+
+- No C dependencies allowed in the bridge import chain
+- Oracle driver (`godror`) is excluded via build tags (`//go:build !cgo`)
+- All database drivers used by the bridge must be pure Go
+- MongoDB driver (`go.mongodb.org/mongo-driver`) is pure Go - compatible
+- Kafka library (`github.com/segmentio/kafka-go`) is pure Go - compatible (do NOT use `confluent-kafka-go` which requires CGO)
+- Pre-commit hook `bridge-build-quick` validates this on every commit
+
+### Build-tagged executor files
+
+In the source repo, executor registrations are split by CGO availability:
+
+| File | Build Tag | Executors |
+|------|-----------|-----------|
+| `executors_cgo.go` | `//go:build cgo` | postgres, mysql, mssql, oracle |
+| `executors_nocgo.go` | `//go:build !cgo` | postgres, mysql, mssql |
+
+## Container Image Publishing
+
+Images are published to `ghcr.io/schemabounce/bridge`.
+
+### Tagging Strategy
+
+- `latest` - latest stable release
+- `vX.Y.Z` - semantic version tags
+- `sha-<commit>` - commit-pinned images for traceability
+
+### Image Hardening Checklist
+
+When modifying the Dockerfile or image build:
+
+- [ ] Multi-stage build (builder stage discarded)
+- [ ] `CGO_ENABLED=0` static binary
+- [ ] Non-root user (UID 1000)
+- [ ] No shell in final image (prefer distroless, or Alpine with shell removed)
+- [ ] `HEALTHCHECK` instruction present
+- [ ] No secrets in image layers
+- [ ] Minimal attack surface (no unnecessary packages)
+- [ ] Image scanned with Trivy/Grype before publish
+- [ ] SBOM generated and attached
+
+## Configuration
+
+All configuration via environment variables (no config files baked into the image):
+
+### Core
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `BRIDGE_MODE` | `wal`, `mysql_outbox`, `mssql_outbox`, `mongodb`, or `kafka` | Yes |
+| `SENDER_MODE` | `redis-direct` (recommended) or `http` | Yes |
+| `LOG_LEVEL` | `debug`, `info`, `warn`, `error` | No (default: `info`) |
+| `LOG_FORMAT` | `json` or `text` | No (default: `json`) |
+| `HEALTH_PORT` | Health check port | No (default: `8081`) |
+| `DATA_DIR` | Cursor persistence directory | No (default: `/var/lib/schemabounce-bridge`) |
+
+### PostgreSQL WAL Mode
+
+| Variable | Description |
+|----------|-------------|
+| `DB_HOST` | PostgreSQL host |
+| `DB_PORT` | PostgreSQL port (default: 5432) |
+| `DB_NAME` | Database name |
+| `DB_USER` | Replication user |
+| `DB_PASSWORD` | Password |
+| `REPLICATION_SLOT` | Logical replication slot name |
+
+### Redis Direct Mode
+
+| Variable | Description |
+|----------|-------------|
+| `REDIS_DIRECT_URL` | Redis connection URL |
+| `WORKSPACE_ID` | SchemaBounce workspace ID |
+| `ENVIRONMENT_ID` | SchemaBounce environment ID |
+| `REDIS_TLS_ENABLED` | Enable mTLS (`true`/`false`) |
+| `REDIS_CA_CERT_FILE` | CA certificate path |
+| `REDIS_CLIENT_CERT_FILE` | Client certificate path |
+| `REDIS_CLIENT_KEY_FILE` | Client key path |
+
+### MongoDB Change Streams Mode
+
+| Variable | Description |
+|----------|-------------|
+| `MONGODB_URI` | MongoDB connection string |
+| `MONGODB_DATABASE` | Database to watch for changes |
+| `MONGODB_POLL_TIMEOUT` | Max wait time for next event (default: `10s`) |
+| `MONGODB_BATCH_SIZE` | Change stream batch size (default: `100`) |
+| `MONGODB_FULL_DOCUMENT` | Full document option: `updateLookup`, `whenAvailable` (default: `updateLookup`) |
+
+### Kafka Consumer Mode
+
+| Variable | Description |
+|----------|-------------|
+| `KAFKA_BROKERS` | Comma-separated broker addresses |
+| `KAFKA_TOPIC` | Topic to consume (Debezium JSON format) |
+| `KAFKA_GROUP_ID` | Consumer group ID (default: `schemabounce-bridge`) |
+| `KAFKA_START_OFFSET` | `earliest` or `latest` (default: `latest`) |
+| `KAFKA_COMMIT_INTERVAL` | Offset commit interval (default: `1s`) |
+| `KAFKA_TLS_ENABLED` | Enable TLS (`true`/`false`) |
+| `KAFKA_CA_CERT_FILE` | CA certificate path |
+| `KAFKA_CLIENT_CERT_FILE` | Client certificate path |
+| `KAFKA_CLIENT_KEY_FILE` | Client key path |
+| `KAFKA_SASL_ENABLED` | Enable SASL authentication (`true`/`false`) |
+| `KAFKA_SASL_MECHANISM` | `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512` |
+| `KAFKA_SASL_USERNAME` | SASL username |
+| `KAFKA_SASL_PASSWORD` | SASL password |
+
+### SSH Tunnel (Optional)
+
+| Variable | Description |
+|----------|-------------|
+| `SSH_TUNNEL_ENABLED` | Enable SSH tunnel (`true`/`false`) |
+| `SSH_BASTION_HOST` | Bastion/jump host address |
+| `SSH_BASTION_PORT` | SSH port (default: 22) |
+| `SSH_BASTION_USER` | SSH username |
+| `SSH_PRIVATE_KEY` | PEM-encoded private key |
+
+## Pre-commit Hooks
 
 ```bash
-# PostgreSQL WAL mode
-BRIDGE_MODE=wal \
-DB_HOST=postgres DB_PORT=5432 DB_NAME=mydb \
-DB_USER=replication_user DB_PASSWORD=secret \
-REPLICATION_SLOT=schemabounce_slot \
-API_ENDPOINT=http://ingest:8082/cdc/events \
-./bridge
+# Install
+pip install pre-commit && pre-commit install
 
-# MySQL Outbox mode
-BRIDGE_MODE=mysql_outbox \
-MYSQL_OUTBOX_HOST=mysql MYSQL_OUTBOX_DATABASE=mydb \
-MYSQL_OUTBOX_USER=root MYSQL_OUTBOX_PASSWORD=secret \
-API_ENDPOINT=http://ingest:8082/cdc/events \
-./bridge
+# Run build validation manually
+pre-commit run bridge-build-validate --hook-stage manual
 
-# MSSQL Outbox mode
-BRIDGE_MODE=mssql_outbox \
-MSSQL_OUTBOX_HOST=sqlserver MSSQL_OUTBOX_DATABASE=mydb \
-MSSQL_OUTBOX_USER=sa MSSQL_OUTBOX_PASSWORD=secret \
-API_ENDPOINT=http://ingest:8082/cdc/events \
-./bridge
+# Run all hooks
+pre-commit run --all-files
 ```
 
-## Key Components
-
-| Component | Purpose |
-|-----------|---------|
-| `wal_consumer.go` | PostgreSQL logical replication consumer |
-| `outbox_poller.go` | MySQL outbox polling |
-| `mssql_outbox_poller.go` | MSSQL outbox polling |
-| `cursor_manager.go` | Position tracking and persistence |
-| `sender.go` | Batch sending with retry and circuit breaker |
-
-
----
-
-## 🔌 Claude Plugin Marketplace Integration
-
-This repository is integrated with the Claude Plugin Marketplace for enhanced AI assistance.
-
-**Marketplace Location**: `/mnt/c/git/claude-plugin/`
-
-### 🛡️ Active Skills (Auto-Activate)
-
-Skills automatically enforce best practices when you interact with Claude:
-
-1. **kolumn-enforce** - Prevents direct SQL, enforces Kolumn HCL
-2. **terraform-only-enforcer** - Blocks manual infrastructure commands
-3. **frontend-orphan-preventer** - Ensures API/frontend synchronization  
-4. **k8s-manifest-validator** - Validates Kubernetes manifests
-5. **argocd-sync-helper** - Diagnoses ArgoCD sync issues
-6. **helm-chart-enforcer** - Validates Helm charts
-7. **agent-orchestrator** - Automated feature pipeline
-8. **frontend-data-ux** - Data professional UX patterns
-9. **git-branching-enforcer** - Git branching strategy
-10. **provider-e2e-testing** - Comprehensive provider testing
-
-### 📚 Documentation
-
-- Skills & MCP: `/mnt/c/git/claude-plugin/SKILLS_AND_MCP_MARKETPLACE.md`
-- Agent Specs: `/mnt/c/git/claude-plugin/AGENT_SPECIFICATIONS.md`
-- Skills Manifest: `/mnt/c/git/claude-plugin/skills/SKILLS_MANIFEST.json`
-
-
----
-
-## 🎯 Assessment Workflow Integration
-
-**This repository uses the Claude Code Assessment Workflow from the marketplace.**
-
-### 📦 Marketplace Location
-`/mnt/c/git/claude-plugin/`
-
-### 🏥 Dr. House Brutal Honest Assessor
-
-**Available Commands**:
-- `/assess` - Run comprehensive code assessment
-- `/review` - Alias for /assess
-- `code review` - Trigger assessment
-
-**What It Does**:
-- Evidence-based code quality validation
-- 100-point rubric scoring (Code Quality, Architecture, Implementation, Professionalism)
-- Automatic GitHub issue creation for all findings
-- Detection of anti-patterns, security vulnerabilities, performance issues
-
-**Features**:
-- ✅ Rubric scoring (4 categories × 25 points = 100 total)
-- ✅ Auto-creates GitHub issues (labeled: `dr-house`, `assessment`)
-- ✅ Severity prioritization (CRITICAL → HIGH → MEDIUM → LOW)
-- ✅ Epic 16 pattern detection (import path mismatches)
-- ✅ Mock test detection
-- ✅ Security vulnerability scanning
-
-### 🤖 GitHub Issue Automator
-
-**Auto-Creates Issues From**:
-- Assessment findings
-- Code review results
-- Quality checks
-
-**Issue Format**:
-- Severity level (CRITICAL/HIGH/MEDIUM/LOW)
-- Evidence (exact code snippet)
-- Problem description
-- Fix required (actionable steps)
-- Example fix (code sample)
-- Verification checklist
-
-### 📊 Assessment Workflow
-
-```bash
-# 1. Run assessment
-User: "/assess"
-
-# 2. Dr. House analyzes code
-- Scans codebase
-- Runs tests and verifies
-- Detects anti-patterns
-- Security scan
-- Performance analysis
-
-# 3. GitHub issues created automatically
-- All findings → GitHub issues
-- Labeled and prioritized
-- Actionable fixes included
-
-# 4. Work on issues (PRIORITIZE ASSESSOR ISSUES FIRST)
-- Fix CRITICAL issues first
-- Then HIGH priority
-- Re-assess to verify improvement
-```
-
-### 🎯 Key Features
-
-**Evidence-Based**:
-- No assumptions, only verified findings
-- Runs actual tests, checks imports
-- Detects real issues
-
-**Automatic Issue Creation**:
-- Every finding → GitHub issue
-- Batch creation with rate limiting
-- Comprehensive issue templates
-
-**Prioritization**:
-- ⚠️ **CRITICAL** - Production blockers, security vulnerabilities
-- ⚠️ **HIGH** - Major bugs, significant technical debt
-- 📋 **MEDIUM** - Code quality issues, missing tests
-- 📋 **LOW** - Style issues, minor improvements
-
-### 📚 Documentation
-
-**Marketplace Documentation**:
-- `/mnt/c/git/claude-plugin/README.md` - Overview
-- `/mnt/c/git/claude-plugin/DR_HOUSE_ASSESSMENT_2025-01-13.md` - Example assessment
-- `/mnt/c/git/claude-plugin/ASSESSMENT_WORKFLOW_COMPLETE.md` - Complete guide
-
-**Skill Documentation**:
-- `/mnt/c/git/claude-plugin/skills/brutal-honest-assessor/` - Skill details
-- `/mnt/c/git/claude-plugin/skills/github-issue-automator/` - Automation details
-
-### 🚨 Important Rules
-
-1. **PRIORITIZE ASSESSOR ISSUES** - Work on Dr. House findings FIRST
-2. **Fix CRITICAL within 24 hours** - Security/production blockers
-3. **Re-assess after fixes** - Verify score improvement
-4. **Target score: 85+** - Maintain quality standards
-
-### 🏥 Dr. House's Standing Reminder
-
-> "Evidence, not assumptions. Tests, not faith. If the assessment says it's broken, it's broken. Fix it, verify it, move on."
-
----
-
-**Assessment Workflow**: ✅ Active
-**Skills**: brutal-honest-assessor (v1.0.0), github-issue-automator (v1.0.0)
-**Maintained By**: SchemaBounce Platform Team
-
----
-
-## 🐹 Go Code Hygiene Standards
-
-**This project follows Go code hygiene standards enforced by `/go-hygiene`.**
-
-### Mandatory Checks (Run Before Commit)
-
-```bash
-# Format code
-gofmt -w ./...
-goimports -w ./...
-
-# Static analysis
-go vet ./...
-
-# Lint (if golangci-lint installed)
-golangci-lint run --timeout=5m
-
-# Tests with race detection
-go test -race ./...
-
-# Module hygiene
-go mod tidy
-```
-
-### Error Handling Rules
-
-```go
-// CORRECT: Always check and wrap errors
-result, err := doSomething()
-if err != nil {
-    return fmt.Errorf("doSomething failed: %w", err)
-}
-
-// FORBIDDEN: Never ignore errors
-result, _ := doSomething()  // NEVER DO THIS
-```
-
-### Naming Conventions
-
-| Type | Convention | Example |
-|------|------------|---------|
-| Exported | PascalCase | `ProcessOrder`, `UserService` |
-| Unexported | camelCase | `processOrder`, `userCount` |
-| Constants | PascalCase | `MaxRetries`, `DefaultTimeout` |
-| Interfaces | -er suffix | `Reader`, `Writer`, `Processor` |
-
-### Context Rules
-
-```go
-// CORRECT: Context as first parameter
-func ProcessData(ctx context.Context, data []byte) error
-
-// WRONG: Context not first
-func ProcessData(data []byte, ctx context.Context) error
-```
-
-### Documentation Requirements
-
-| What | When | Format |
-|------|------|--------|
-| Exported functions | Always | GoDoc comment above function |
-| Packages | Always | `doc.go` file |
-| Complex logic | When non-obvious | Inline comments + Mermaid diagram |
-| Architecture | New features | Mermaid diagram in docs/ |
-
-### Mermaid Diagram Standards
-
-Use Mermaid diagrams for:
-- **Sequence diagrams**: API flows, multi-service interactions
-- **State diagrams**: Entity lifecycle, state machines
-- **Architecture diagrams**: Component relationships
-
-Place in `docs/` directory or README.md:
-
-```markdown
-# Example: Sequence Diagram
-```mermaid
-sequenceDiagram
-    Client->>API: Request
-    API->>Service: Process
-    Service-->>API: Response
-    API-->>Client: Result
-```
-```
-
-### Post-Assessment Integration
-
-After running `/assess` or `/review`, Go projects automatically trigger:
-1. `gofmt -l ./...` - Format check
-2. `go vet ./...` - Static analysis
-3. Summary of Go-specific findings
-
-Run `/go-hygiene` for full detailed report.
-
-### golangci-lint Configuration
-
-Create `.golangci.yml` in project root:
-
-```yaml
-run:
-  timeout: 5m
-
-linters:
-  enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - gofmt
-    - goimports
-    - gosec
-    - contextcheck
-
-linters-settings:
-  govet:
-    check-shadowing: true
-  errcheck:
-    check-type-assertions: true
-```
-
----
-
----
-
-## E2E Testing
-
-This repo has access to the **platform-e2e-tester** skill for end-to-end testing.
-
-### Slash Commands
-- `/e2e-platform` - Full platform E2E test
-- `/e2e-frontend` - Frontend-focused E2E
-- `/e2e-api` - API E2E test
-- `/e2e-etl` - ETL pipeline E2E
-
-### Requirements
-- Uses K8s API (NOT localhost)
-- Runs restart-all.sh first
-- Creates REAL Redis + Stream Worker pods
-- Frontend configuration via chrome-devtools
-
-See: `/mnt/c/git/claude-plugin/skills/platform-e2e-tester/SKILL.md`
+### Hooks
+
+| Hook | Stage | Purpose |
+|------|-------|---------|
+| `bridge-build-quick` | commit | Validates `CGO_ENABLED=0` build compiles |
+| `bridge-build-validate` | manual | Full validation: build + go vet + static link check |
+| `gitleaks` | commit | Secret detection |
+| `detect-private-key` | commit | Prevents committing private keys |
+| `check-added-large-files` | commit | Blocks files > 1MB |
+| `no-commit-to-branch` | commit | Prevents direct commits to main |
