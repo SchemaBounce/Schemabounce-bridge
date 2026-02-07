@@ -8,6 +8,18 @@ This file provides guidance to Claude Code when working in this repository.
 
 Published as a container image on **GitHub Container Registry (ghcr.io)**.
 
+### 🚨 DATA PIPELINE ARCHITECTURE — SINGLE SOURCE OF TRUTH 🚨
+
+**[`/mnt/c/git/core-api/docs/DATA_PIPELINE_ARCHITECTURE_MATRIX.md`](/mnt/c/git/core-api/docs/DATA_PIPELINE_ARCHITECTURE_MATRIX.md)**
+
+This is the CUSTOMER-HOSTED, OPTIONAL CDC agent (connection type 3).
+For SchemaBounce-hosted CDC pull, see **Database Connector Worker** (`/mnt/c/git/database-connector-worker/`).
+For sink delivery (Redis → destinations), see **Sink Worker** (`/mnt/c/git/sink-worker/`).
+ALL events go to SchemaBounce-hosted per-environment Redis — NEVER customer-hosted.
+The Bridge pushes events OUT of the customer network into SchemaBounce infrastructure.
+
+---
+
 ### Security Context
 
 This binary runs inside customer infrastructure with direct access to production databases. Security and container hardening are non-negotiable:
@@ -25,6 +37,7 @@ This binary runs inside customer infrastructure with direct access to production
 | `mssql_outbox` | SQL Server | Outbox Polling | ~3 seconds |
 | `mongodb` | MongoDB | Change Streams | ~milliseconds |
 | `kafka` | Kafka | Consumer (Debezium JSON) | ~milliseconds |
+| `mysql_binlog` | MySQL/MariaDB | Binary Log Replication | ~milliseconds |
 
 ### Sender Modes
 
@@ -97,6 +110,7 @@ The bridge binary MUST build with `CGO_ENABLED=0` to produce a static binary for
 - All database drivers used by the bridge must be pure Go
 - MongoDB driver (`go.mongodb.org/mongo-driver`) is pure Go - compatible
 - Kafka library (`github.com/segmentio/kafka-go`) is pure Go - compatible (do NOT use `confluent-kafka-go` which requires CGO)
+- MySQL binlog library (`github.com/go-mysql-org/go-mysql`) is pure Go - compatible
 - Pre-commit hook `bridge-build-quick` validates this on every commit
 
 ### Build-tagged executor files
@@ -140,7 +154,7 @@ All configuration via environment variables (no config files baked into the imag
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `BRIDGE_MODE` | `wal`, `mysql_outbox`, `mssql_outbox`, `mongodb`, or `kafka` | Yes |
+| `BRIDGE_MODE` | `wal`, `mysql_outbox`, `mssql_outbox`, `mongodb`, `kafka`, or `mysql_binlog` | Yes |
 | `SENDER_MODE` | `redis-direct` (recommended) or `http` | Yes |
 | `LOG_LEVEL` | `debug`, `info`, `warn`, `error` | No (default: `info`) |
 | `LOG_FORMAT` | `json` or `text` | No (default: `json`) |
@@ -197,6 +211,30 @@ All configuration via environment variables (no config files baked into the imag
 | `KAFKA_SASL_MECHANISM` | `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512` |
 | `KAFKA_SASL_USERNAME` | SASL username |
 | `KAFKA_SASL_PASSWORD` | SASL password |
+
+### MySQL Binlog Mode
+
+| Variable | Description |
+|----------|-------------|
+| `MYSQL_BINLOG_HOST` | MySQL host |
+| `MYSQL_BINLOG_PORT` | MySQL port (default: 3306) |
+| `MYSQL_BINLOG_USER` | Replication user (needs REPLICATION SLAVE, REPLICATION CLIENT) |
+| `MYSQL_BINLOG_PASSWORD` | Password |
+| `MYSQL_BINLOG_DATABASE` | Database name (for INFORMATION_SCHEMA queries) |
+| `MYSQL_BINLOG_SERVER_ID` | Unique server ID for replication (required, must be > 0) |
+| `MYSQL_BINLOG_FLAVOR` | `mysql` or `mariadb` (default: `mysql`) |
+| `MYSQL_BINLOG_GTID_ENABLED` | Use GTID-based replication (`true`/`false`) |
+| `MYSQL_BINLOG_START_POSITION` | Start position as `file:pos` (e.g., `mysql-bin.000001:4`) |
+| `MYSQL_BINLOG_START_GTID` | Start GTID set (e.g., `uuid:1-5`) |
+| `MYSQL_BINLOG_TLS_ENABLED` | Enable TLS (`true`/`false`) |
+| `MYSQL_BINLOG_CA_CERT_FILE` | CA certificate path |
+| `MYSQL_BINLOG_CLIENT_CERT_FILE` | Client certificate path |
+| `MYSQL_BINLOG_CLIENT_KEY_FILE` | Client key path |
+| `MYSQL_BINLOG_HEARTBEAT_PERIOD` | Heartbeat interval (default: `30s`) |
+| `MYSQL_BINLOG_INCLUDE_DATABASES` | Comma-separated list of databases to include |
+| `MYSQL_BINLOG_EXCLUDE_DATABASES` | Comma-separated list of databases to exclude |
+| `MYSQL_BINLOG_INCLUDE_TABLES` | Comma-separated list of tables to include |
+| `MYSQL_BINLOG_EXCLUDE_TABLES` | Comma-separated list of tables to exclude |
 
 ### SSH Tunnel (Optional)
 
