@@ -1,0 +1,226 @@
+# .golangci.yml - Standard Go linting configuration
+# Deploy to project root as .golangci.yml
+#
+# Run: golangci-lint run --timeout=5m
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+  skip-dirs:
+    - vendor
+    - third_party
+    - testdata
+    - examples
+    - docs
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+  sort-results: true
+
+linters:
+  disable-all: true
+  enable:
+    # ==========================================================================
+    # DEFAULT LINTERS (always enabled)
+    # ==========================================================================
+    - errcheck      # Check for unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Go vet checks
+    - ineffassign   # Detect unused assignments
+    - staticcheck   # Static analysis
+    - unused        # Find unused code
+
+    # ==========================================================================
+    # FORMATTING
+    # ==========================================================================
+    - gofmt         # Check gofmt formatting
+    - goimports     # Check import ordering
+    - whitespace    # Check for unnecessary whitespace
+
+    # ==========================================================================
+    # BUGS & ERRORS
+    # ==========================================================================
+    - bodyclose     # Check HTTP response body is closed
+    - noctx         # Check context is passed to HTTP requests
+    - rowserrcheck  # Check sql.Rows.Err() is checked
+    - sqlclosecheck # Check sql.Rows/Stmt are closed
+    - contextcheck  # Check context.Context is propagated
+
+    # ==========================================================================
+    # SECURITY
+    # ==========================================================================
+    - gosec         # Security checks
+
+    # ==========================================================================
+    # CODE QUALITY
+    # ==========================================================================
+    - gocritic      # Comprehensive code analysis
+    - revive        # Fast, configurable linter
+    - unconvert     # Remove unnecessary type conversions
+    - misspell      # Spell checker
+    - prealloc      # Suggest preallocating slices
+    - nakedret      # Find naked returns in large functions
+    - exportloopref # Check for pointers to loop variables
+
+    # ==========================================================================
+    # COMPLEXITY
+    # ==========================================================================
+    - gocyclo       # Cyclomatic complexity
+    - gocognit      # Cognitive complexity
+    - nestif        # Deeply nested if statements
+    - funlen        # Long functions
+
+    # ==========================================================================
+    # STYLE
+    # ==========================================================================
+    - godot         # Check comments end with a period
+    - nolintlint    # Check nolint directives
+
+linters-settings:
+  # ===========================================================================
+  # ERROR CHECKING
+  # ===========================================================================
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+    exclude-functions:
+      - io.Copy
+      - io.WriterTo.WriteTo
+      - (*bytes.Buffer).Write
+      - (*bytes.Buffer).WriteByte
+      - (*bytes.Buffer).WriteString
+      - fmt.Fprint
+      - fmt.Fprintf
+      - fmt.Fprintln
+
+  # ===========================================================================
+  # GO VET
+  # ===========================================================================
+  govet:
+    check-shadowing: true
+    enable-all: true
+    disable:
+      - fieldalignment  # Too noisy for most projects
+
+  # ===========================================================================
+  # COMPLEXITY
+  # ===========================================================================
+  gocyclo:
+    min-complexity: 15
+
+  gocognit:
+    min-complexity: 20
+
+  funlen:
+    lines: 100
+    statements: 50
+
+  nestif:
+    min-complexity: 5
+
+  # ===========================================================================
+  # SECURITY
+  # ===========================================================================
+  gosec:
+    severity: medium
+    confidence: medium
+    excludes:
+      - G104  # Audit errors not checked (handled by errcheck)
+      - G304  # File path provided as taint input (often intentional)
+    config:
+      G306: "0644"  # Expect file permissions
+
+  # ===========================================================================
+  # CODE QUALITY
+  # ===========================================================================
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+      - experimental
+      - opinionated
+    disabled-checks:
+      - hugeParam            # Too strict for most use cases
+      - rangeValCopy         # Often intentional
+      - commentedOutCode     # Too many false positives
+      - whyNoLint            # Handled by nolintlint
+
+  revive:
+    severity: warning
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  # ===========================================================================
+  # STYLE
+  # ===========================================================================
+  misspell:
+    locale: US
+
+  nakedret:
+    max-func-lines: 30
+
+  nolintlint:
+    require-explanation: true
+    require-specific: true
+    allow-unused: false
+
+  godot:
+    scope: toplevel
+    capital: true
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - funlen
+        - gocognit
+
+    # Exclude known issues in generated files
+    - path: \.pb\.go
+      linters:
+        - all
+
+    # Allow fmt.Print in main packages
+    - path: main\.go
+      linters:
+        - forbidigo
+
+    # Allow dot imports in tests
+    - path: _test\.go
+      text: "dot-imports"
+
+  max-issues-per-linter: 50
+  max-same-issues: 10
+  new: false
